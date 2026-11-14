@@ -182,6 +182,27 @@ File File::create_new(const std::wstring& path) {
     return f;
 }
 
+File File::open_read_unbuffered(const std::wstring& path) {
+    File f;
+    f.path_ = path;
+    f.handle_ = CreateFileW(long_path(path).c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                            FILE_FLAG_NO_BUFFERING, nullptr);
+    if (f.handle_ == INVALID_HANDLE_VALUE)
+        throw Failure("Cannot open " + utf8(path) + ": " + win_error(GetLastError()));
+    return f;
+}
+
+File File::open_write_existing(const std::wstring& path) {
+    File f;
+    f.path_ = path;
+    f.handle_ = CreateFileW(long_path(path).c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
+                            FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f.handle_ == INVALID_HANDLE_VALUE)
+        throw Failure("Cannot open " + utf8(path) + ": " + win_error(GetLastError()));
+    f.pending_.reserve(kWriteBuffer);
+    return f;
+}
+
 File::File(File&& other) noexcept { *this = std::move(other); }
 
 File& File::operator=(File&& other) noexcept {
@@ -213,8 +234,8 @@ size_t File::read(void* data, size_t size) {
         DWORD want = DWORD(std::min<size_t>(size - done, 1u << 30)), got = 0;
         if (!ReadFile(handle_, p + done, want, &got, nullptr))
             throw Failure("Cannot read " + utf8(path_) + ": " + win_error(GetLastError()));
-        if (!got) break;
         done += got;
+        if (got < want) break;  // end of file (an unbuffered handle must not read again from there)
     }
     return done;
 }
@@ -372,6 +393,10 @@ void restore_any(const std::wstring& source, const std::wstring& target, const s
     {
         File f = File::open_read(absolute_path(source));
         f.read(magic, sizeof magic);
+    }
+    if (!std::memcmp(magic, "OCPACK01", 8)) {
+        restore_pack(source, target);
+        return;
     }
     if (!std::memcmp(magic, "OCLLZ001", 8) || !std::memcmp(magic, "OCLRLE01", 8)) {
         restore_legacy(source, target, device);

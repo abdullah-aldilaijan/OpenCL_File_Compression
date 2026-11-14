@@ -9,10 +9,11 @@
 
 namespace {
 
-enum : int { ID_DEVICE = 100, ID_REFRESH, ID_COMPRESS_FILE, ID_COMPRESS_FOLDER, ID_RESTORE, ID_LOG };
+enum : int { ID_DEVICE = 100, ID_REFRESH, ID_COMPRESS_FILE, ID_COMPRESS_FOLDER, ID_RESTORE, ID_LOG, ID_FORMAT };
 enum : UINT { WM_APP_LOG = WM_APP + 1, WM_APP_DONE };
 
-HWND g_window, g_title, g_intro, g_device_label, g_device, g_refresh, g_buttons[3], g_log, g_status;
+HWND g_window, g_title, g_intro, g_device_label, g_device, g_refresh, g_format_label, g_format, g_buttons[3], g_log,
+    g_status;
 HFONT g_font, g_title_font;
 std::vector<DeviceOption> g_options;
 std::atomic<bool> g_busy{false};
@@ -66,9 +67,18 @@ void append_log(const std::wstring& text) {
     SendMessageW(g_log, EM_REPLACESEL, FALSE, LPARAM(crlf.c_str()));
 }
 
+// Archive format for compression: index into the Format dropdown.
+enum Format { kZip = 0, kPackFast = 1, kPackMax = 2, kPackDeflate = 3 };
+
+Format selected_format() {
+    int i = int(SendMessageW(g_format, CB_GETCURSEL, 0, 0));
+    return i == 1 ? kPackFast : i == 2 ? kPackMax : i == 3 ? kPackDeflate : kZip;
+}
+
 void enable_controls(bool on) {
     for (HWND b : g_buttons) EnableWindow(b, on);
     EnableWindow(g_device, on);
+    EnableWindow(g_format, on);
     EnableWindow(g_refresh, on);
 }
 
@@ -165,11 +175,14 @@ void start(Action action) {
     if (action == Action::CompressFolder) source = open_dialog(L"Select folder to compress", true, {});
     else if (action == Action::CompressFile) source = open_dialog(L"Select file", false, {{L"All files", L"*.*"}});
     else
-        source = open_dialog(L"Select ZIP or OCLR archive", false,
-                             {{L"Archives (*.zip; *.oclr)", L"*.zip;*.oclr"}, {L"All files", L"*.*"}});
+        source = open_dialog(L"Select ZIP, OCPK or OCLR archive", false,
+                             {{L"Archives (*.zip; *.ocpk; *.oclr)", L"*.zip;*.ocpk;*.oclr"}, {L"All files", L"*.*"}});
     if (source.empty()) return;
     std::wstring name = name_of(source), parent = parent_of(source), target;
-    bool to_folder = action == Action::Restore && (ends_with(source, L".zip") || ends_with(source, L".folder.oclr"));
+    bool to_folder = action == Action::Restore && (ends_with(source, L".zip") || ends_with(source, L".ocpk") ||
+                                                   ends_with(source, L".folder.oclr"));
+    Format format = selected_format();
+    const wchar_t* extension = format == kZip ? L"zip" : L"ocpk";
 
     if (action == Action::Restore && to_folder) {
         target = save_dialog(L"Name for a NEW destination folder", stem(name) + L"-restored", parent, nullptr, {});
@@ -187,7 +200,8 @@ void start(Action action) {
         for (;;) {
             target = save_dialog(action == Action::CompressFolder ? L"Save archive outside the source folder"
                                                                   : L"Save output as",
-                                 name + L".zip", parent, L"zip", {{L"ZIP archive", L"*.zip"}});
+                                 name + L"." + extension, parent, extension,
+                                 {format == kZip ? Filter{L"ZIP archive", L"*.zip"} : Filter{L"OCPK archive", L"*.ocpk"}});
             if (target.empty()) return;
             if (action == Action::CompressFolder && is_within(target, source)) {
                 MessageBoxW(g_window,
@@ -210,12 +224,14 @@ void start(Action action) {
     set_status(L"Working…");
     SetWindowTextW(g_log, L"");
     g_output.clear();
-    std::thread([action, source, target, device] {
+    std::thread([action, source, target, device, format] {
         int code = 0;
         double begin = seconds_now();
         try {
             if (action == Action::Restore) restore_any(source, target, device);
-            else create_zip(source, target, device);
+            else if (format == kZip) create_zip(source, target, device);
+            else if (format == kPackDeflate) create_pack(source, target, "deflate:" + device);
+            else create_pack(source, target, format == kPackMax ? "max" : "fast");
             char elapsed[64];
             std::snprintf(elapsed, sizeof elapsed, "%.3fs", seconds_now() - begin);
             say(std::string("Total elapsed: ") + elapsed);
@@ -237,7 +253,8 @@ void apply_fonts() {
                          CLEARTYPE_QUALITY, 0, L"Segoe UI");
     g_title_font = CreateFontW(-MulDiv(16, int(dpi), 72), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
                                CLEARTYPE_QUALITY, 0, L"Segoe UI");
-    HWND all[] = {g_intro, g_device_label, g_device, g_refresh, g_buttons[0], g_buttons[1], g_buttons[2], g_log, g_status};
+    HWND all[] = {g_intro,      g_device_label, g_device,     g_refresh,    g_format_label, g_format,
+                  g_buttons[0], g_buttons[1],   g_buttons[2], g_log,        g_status};
     for (HWND h : all) SendMessageW(h, WM_SETFONT, WPARAM(g_font), TRUE);
     SendMessageW(g_title, WM_SETFONT, WPARAM(g_title_font), TRUE);
     HFONT mono = CreateFontW(-MulDiv(9, int(dpi), 72), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
@@ -262,6 +279,10 @@ void layout() {
     y += scale(34);
     MoveWindow(g_refresh, pad, y, scale(130), button_h, TRUE);
     y += button_h + scale(8);
+    MoveWindow(g_format_label, pad, y, w, line, TRUE);
+    y += line;
+    MoveWindow(g_format, pad, y, std::min(w, scale(560)), scale(200), TRUE);
+    y += scale(34);
     int x = pad;
     for (HWND b : g_buttons) {
         MoveWindow(b, x, y, scale(140), button_h, TRUE);
@@ -285,12 +306,20 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g_window = hwnd;
             g_title = control(L"STATIC", L"File and folder compression", 0, 0);
             g_intro = control(L"STATIC",
-                              L"Choose CPU or a GPU for file and folder compression.\r\nCPU and GPU both create "
-                              L"standard ZIP files. ZIP extraction currently uses CPU.",
+                              L"ZIP: standard archive made with the CPU or a GPU; opens anywhere.\r\nOCPK: all files "
+                              L"combined and compressed together on the CPU; smaller, opened by this tool.",
                               0, 0);
             g_device_label = control(L"STATIC", L"Processing device:", 0, 0);
             g_device = control(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, ID_DEVICE);
             g_refresh = control(L"BUTTON", L"Refresh devices", BS_PUSHBUTTON | WS_TABSTOP, ID_REFRESH);
+            g_format_label = control(L"STATIC", L"Archive format:", 0, 0);
+            g_format = control(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_TABSTOP, ID_FORMAT);
+            for (const wchar_t* item : {L"ZIP \u2014 standard, opens anywhere (CPU or GPU)",
+                                        L"OCPK fast \u2014 solid, smaller, repeated data once (CPU)",
+                                        L"OCPK max \u2014 smallest, much slower (CPU)",
+                                        L"OCPK DEFLATE \u2014 solid, repeated data once (CPU, GPU or ALL)"})
+                SendMessageW(g_format, CB_ADDSTRING, 0, LPARAM(item));
+            SendMessageW(g_format, CB_SETCURSEL, 0, 0);
             g_buttons[0] = control(L"BUTTON", L"Compress file", BS_PUSHBUTTON | WS_TABSTOP, ID_COMPRESS_FILE);
             g_buttons[1] = control(L"BUTTON", L"Compress folder", BS_PUSHBUTTON | WS_TABSTOP, ID_COMPRESS_FOLDER);
             g_buttons[2] = control(L"BUTTON", L"Restore archive", BS_PUSHBUTTON | WS_TABSTOP, ID_RESTORE);
@@ -323,7 +352,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_GETMINMAXINFO: {
             if (!g_window) break;
             auto* info = reinterpret_cast<MINMAXINFO*>(lp);
-            info->ptMinTrackSize = {scale(560), scale(380)};
+            info->ptMinTrackSize = {scale(560), scale(440)};
             return 0;
         }
         case WM_CTLCOLORSTATIC:
@@ -396,7 +425,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command_line, int show)
     RegisterClassExW(&wc);
     UINT dpi = GetDpiForSystem();
     HWND hwnd = CreateWindowExW(0, wc.lpszClassName, L"OpenCL compression prototype (C++)", WS_OVERLAPPEDWINDOW,
-                                CW_USEDEFAULT, CW_USEDEFAULT, MulDiv(760, int(dpi), 96), MulDiv(520, int(dpi), 96),
+                                CW_USEDEFAULT, CW_USEDEFAULT, MulDiv(760, int(dpi), 96), MulDiv(580, int(dpi), 96),
                                 nullptr, nullptr, instance, nullptr);
     ShowWindow(hwnd, show);
     MSG msg;

@@ -1,0 +1,186 @@
+<title>oclzip Test Matrix</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@600&display=swap">
+<style>
+/* Layout: one reading column; wide tables scroll in their own box. Device colors are fixed across every table. */
+:root{
+  --bg:#f6f7f8; --surface:#ffffff; --fg:#1b2127; --muted:#5b6670; --line:#dde2e6;
+  --cpu:#2f6fb3; --gpu:#3d9a5c; --all:#b8742a; --ocpk:#8a54a8;
+  --best:#e8f1fb; --ok:#2e7d4f;
+  --sans:"IBM Plex Sans",system-ui,sans-serif; --mono:"IBM Plex Mono",ui-monospace,Consolas,monospace;
+  --display:"IBM Plex Sans Condensed","IBM Plex Sans",system-ui,sans-serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#12161a; --surface:#1a2026; --fg:#e4e8eb; --muted:#93a0ab; --line:#2c353d;
+  --cpu:#6ea7e6; --gpu:#6cc58b; --all:#e0a25a; --ocpk:#bf8ddb; --best:#1d2c3c; --ok:#6cc58b; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#12161a; --surface:#1a2026; --fg:#e4e8eb; --muted:#93a0ab; --line:#2c353d;
+  --cpu:#6ea7e6; --gpu:#6cc58b; --all:#e0a25a; --ocpk:#bf8ddb; --best:#1d2c3c; --ok:#6cc58b; color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font:15px/1.55 var(--sans)}
+main{max-width:1040px;margin:0 auto;padding-block:32px 64px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:grid;gap:36px}
+h1{font:600 2rem/1.15 var(--display);margin:0;text-wrap:balance;letter-spacing:-.01em}
+h2{font:600 1.3rem/1.2 var(--display);margin:0 0 6px;text-wrap:balance}
+p{margin:0;max-width:68ch}
+.sub{color:var(--muted);margin-top:8px}
+.facts{display:flex;flex-wrap:wrap;gap:10px 28px;margin-top:18px;font:500 13px var(--mono)}
+.facts span b{color:var(--ok);font-weight:500}
+section{display:grid;gap:12px}
+ul.find{margin:0;padding-left:20px;display:grid;gap:6px;max-width:72ch}
+.ctrl{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:13px;color:var(--muted)}
+.ctrl button{font:500 13px var(--mono);padding:5px 11px;border:1px solid var(--line);background:var(--surface);color:var(--fg);border-radius:4px;cursor:pointer}
+.ctrl button[aria-pressed="true"]{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+.ctrl button:focus-visible{outline:2px solid var(--cpu);outline-offset:2px}
+.scroll{overflow-x:auto;background:var(--surface);border:1px solid var(--line);border-radius:6px}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums;font-size:13.5px}
+th,td{padding:7px 12px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
+th{font:600 11.5px var(--sans);text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+tbody tr:last-child td{border-bottom:0}
+td.num{font-family:var(--mono);text-align:right}
+.cell{display:grid;grid-template-columns:4.2em 1fr;gap:8px;align-items:center;min-width:150px}
+.cell span{font-family:var(--mono);text-align:right}
+.bar{height:8px;border-radius:2px;background:var(--c);opacity:.85}
+td.best{background:var(--best)}
+.key{display:inline-block;width:10px;height:10px;border-radius:2px;background:var(--c);margin-right:6px;vertical-align:-1px}
+.note{font-size:13px;color:var(--muted);max-width:76ch}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+.grid2>div{min-width:0}
+h3{font:600 13px var(--sans);margin:0 0 6px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+@media (prefers-reduced-motion:no-preference){.bar{transition:width .25s ease}}
+.muted{color:var(--muted, #888)}
+</style>
+
+<main>
+<header>
+  <h1>oclzip test matrix</h1>
+  <p class="sub">i7-10700K (8 cores, 16 threads), RTX 2070 SUPER, 32 GB RAM, one NVMe drive. Test files built from 4 MiB slices of the Object folder, so every file mixes video, installers and documents the same way. 43.3 GiB of test data in total.</p>
+  <div class="facts" id="facts"></div>
+</header>
+
+<section>
+  <h2>What the runs show</h2>
+  <ul class="find">
+<!--FINDINGS-->
+  </ul>
+</section>
+
+<section>
+  <h2>ZIP speed by source</h2>
+  <p class="note">Median of 3 runs, total wall time including start-up. The fastest device for each source is highlighted.</p>
+  <div class="ctrl" role="group" aria-label="ZIP chunk size">Chunk size:<span id="chunkBtns" style="display:contents"></span></div>
+  <div class="scroll"><table id="speed"></table></div>
+</section>
+
+<section>
+  <h2>.ocpk speed by source</h2>
+  <p class="note">XPRESS is the Windows compressor on the CPU (level fast). DEFLATE is the ZIP encoder (32 KiB chunks) on the GPU, GPU + CPU, or CPU only; all three write the same archive. The fastest option for each source is highlighted.</p>
+  <div class="ctrl" role="group" aria-label=".ocpk block size">Block size:<span id="blockBtns" style="display:contents"></span></div>
+  <div class="scroll"><table id="pspeed"></table></div>
+</section>
+
+<section>
+  <h2>Space saved by chunk size</h2>
+  <p class="note">The output is the same on CPU, GPU and ALL, so space saved depends only on the compressor and the chunk or block size.</p>
+  <div class="scroll"><table id="saved"></table></div>
+</section>
+
+<section>
+  <h2>Every option, one source at a time</h2>
+  <div class="ctrl" role="group" aria-label="Source"><span id="srcBtns" style="display:contents"></span></div>
+  <div class="scroll"><table id="detail"></table></div>
+</section>
+
+<section>
+  <h2>Scaling with processing units</h2>
+  <p class="note">Median MB/s of 2 runs at a 32 KiB chunk. For each source, every setting produced a byte-identical ZIP.</p>
+  <div class="grid2" id="units"></div>
+</section>
+
+<p class="note">How it was tested: 13 sources (one file and the whole folder for each size, plus all sets together) × 39 options (ZIP on CPU, GPU and ALL at 2/4/8/16/32/64/128/256/512 KiB chunks, and .ocpk with XPRESS, or with DEFLATE on GPU, ALL and CPU, at 1/4/16 MiB blocks), 3 runs each. Runs 2 and 3 pre-read sources under 16 GiB into the file cache and change the order of the options. Added later with 1 run each: ZIP at 1 KiB and 1 MiB chunks, .ocpk at 2/8/32/64 MiB blocks, and the 4 × 10 GiB set, which ran only these new options (its other cells say “not run”). Run 1 verified every archive: each CPU ZIP was fully decompressed and each .ocpk passed <code>oclzip test</code> (for the new options only on sources up to 16 GiB, to save time), and each archive’s CRC was compared across CPU, GPU and ALL on every source.</p>
+</main>
+
+<script>
+const D = /*DATA*/null;
+const C = {CPU:"var(--cpu)",GPU:"var(--gpu)",ALL:"var(--all)",ocpk:"var(--ocpk)"};
+const CHUNKS = ["1k","2k","4k","8k","16k","32k","64k","128k","256k","512k","1024k"];
+const BLOCKS = ["1m","2m","4m","8m","16m","32m","64m"];
+const PACK = [["fast","XPRESS",C.ocpk],["gpu","DEFLATE GPU",C.GPU],["all","DEFLATE ALL",C.ALL],["cpu","DEFLATE CPU",C.CPU]];
+const gib = b => b >= 2**30 ? (b/2**30).toFixed(b>=10*2**30?1:2)+" GiB" : Math.round(b/2**20)+" MiB";
+const esc = s => String(s).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+const kib = k => k === "1024k" ? "1 MiB" : k.replace("k"," KiB"), mib = m => m.replace("m"," MiB");
+function bar(v, max, c){ return v == null ? '<span class="note">not run</span>' : `<div class="cell" style="--c:${c}"><span>${Math.round(v).toLocaleString()}</span><div class="bar" style="width:${Math.max(2,100*v/max)}%"></div></div>`; }
+const M = (s, k, i) => s.m[k] ? s.m[k][i] : null;
+const pct = v => v == null ? "not run" : v.toFixed(2) + "%";
+
+document.getElementById("facts").innerHTML =
+  `<span>${D.runs} matrix runs, <b>${D.failed} failed</b></span><span>${D.verified} archives fully verified</span>` +
+  `<span>${D.groups} CPU/GPU/ALL groups, <b>${D.mism} differ</b></span><span>${D.unit_runs} unit-scaling runs</span>`;
+
+let chunk = "32k", block = "4m", srcKey = D.sources[0].key;
+function buttons(id, items, cur, set){
+  const el = document.getElementById(id);
+  el.innerHTML = items.map(([k,l]) => `<button type="button" id="${id}-${k.replace(/\W/g,'_')}" data-k="${k}" aria-pressed="${k===cur}">${esc(l)}</button>`).join("");
+  el.onclick = e => { const b = e.target.closest("button"); if (b) set(b.dataset.k); };
+}
+function speedTable(id, cols){  // cols: [label, mode, color]
+  const vals = D.sources.map(s => cols.map(c => M(s, c[1], 1)));
+  const max = Math.max(...vals.flat().filter(v => v != null));
+  let h = `<thead><tr><th>Source</th><th>Size</th>${cols.map(c=>`<th><span class="key" style="--c:${c[2]}"></span>${esc(c[0])} MB/s</th>`).join("")}</tr></thead><tbody>`;
+  D.sources.forEach((s, r) => {
+    const best = Math.max(...vals[r].filter(v => v != null));
+    h += `<tr><td>${esc(s.label)}</td><td class="num">${gib(s.bytes)}</td>` +
+      vals[r].map((v,i) => `<td class="${v===best?'best':''}">${bar(v,max,cols[i][2])}</td>`).join("") + `</tr>`;
+  });
+  document.getElementById(id).innerHTML = h + "</tbody>";
+}
+function renderSpeed(){
+  buttons("chunkBtns", CHUNKS.map(k=>[k,kib(k)]), chunk, k=>{chunk=k;renderSpeed();});
+  speedTable("speed", ["CPU","GPU","ALL"].map(d => [d, `zip-${d}-${chunk}`, C[d]]));
+}
+function renderPack(){
+  buttons("blockBtns", BLOCKS.map(k=>[k,mib(k)]), block, k=>{block=k;renderPack();});
+  speedTable("pspeed", PACK.map(([lvl,label,c]) => [label, `ocpk-${lvl}-${block}`, c]));
+}
+
+function renderSaved(){
+  let h = `<thead><tr><th>Source</th>${CHUNKS.map(k=>`<th style="text-align:right">ZIP ${kib(k)}</th>`).join("")}` +
+    BLOCKS.map(b=>`<th style="text-align:right">XPRESS ${mib(b)}</th>`).join("") +
+    BLOCKS.map(b=>`<th style="text-align:right">DEFLATE ${mib(b)}</th>`).join("") + `</tr></thead><tbody>`;
+  for (const s of D.sources){
+    h += `<tr><td>${esc(s.label)}</td>` + CHUNKS.map(k => `<td class="num">${pct(M(s,`zip-CPU-${k}`,2))}</td>`).join("") +
+      BLOCKS.map(b => `<td class="num">${pct(M(s,`ocpk-fast-${b}`,2))}</td>`).join("") +
+      BLOCKS.map(b => `<td class="num">${pct(M(s,`ocpk-gpu-${b}`,2) ?? M(s,`ocpk-cpu-${b}`,2))}</td>`).join("") + "</tr>";
+  }
+  document.getElementById("saved").innerHTML = h + "</tbody>";
+}
+
+function renderDetail(){
+  buttons("srcBtns", D.sources.map(s=>[s.key,s.label]), srcKey, k=>{srcKey=k;renderDetail();});
+  const s = D.sources.find(x => x.key === srcKey);
+  const max = Math.max(...Object.values(s.m).map(v=>v[1]));
+  const fastest = Math.min(...Object.values(s.m).map(v=>v[0]));
+  const cell = (k, c) => { const v = s.m[k]; return v ? `<td class="${v[0]===fastest?'best':''}">${bar(v[1],max,c)}</td><td class="num">${v[0].toFixed(2)} s</td>` : `<td>${bar(null)}</td><td></td>`; };
+  let h = `<thead><tr><th>Option</th>${["CPU","GPU","ALL"].map(d=>`<th><span class="key" style="--c:${C[d]}"></span>${d} MB/s</th><th style="text-align:right">${d} time</th>`).join("")}<th style="text-align:right">Saved</th></tr></thead><tbody>`;
+  for (const k of CHUNKS)
+    h += `<tr><td>ZIP ${kib(k)}</td>` + ["CPU","GPU","ALL"].map(d => cell(`zip-${d}-${k}`, C[d])).join("") + `<td class="num">${pct(M(s,`zip-CPU-${k}`,2))}</td></tr>`;
+  for (const b of BLOCKS)
+    h += `<tr><td>.ocpk DEFLATE ${mib(b)}</td>` + [["cpu","CPU"],["gpu","GPU"],["all","ALL"]].map(([l,d]) => cell(`ocpk-${l}-${b}`, C[d])).join("") + `<td class="num">${pct(M(s,`ocpk-gpu-${b}`,2))}</td></tr>`;
+  for (const b of BLOCKS)
+    h += `<tr><td>.ocpk XPRESS ${mib(b)}</td>` + cell(`ocpk-fast-${b}`, C.ocpk) + `<td colspan="4" class="muted" style="text-align:center">CPU only (XPRESS has no GPU version)</td><td class="num">${pct(M(s,`ocpk-fast-${b}`,2))}</td></tr>`;
+  document.getElementById("detail").innerHTML = h + "</tbody>";
+}
+
+function renderUnits(){
+  const groups = [
+    ["ZIP on CPU: threads", "zip-CPU-threads", [1,2,4,8,12,16], C.CPU],
+    ["ZIP on GPU: chunks per batch", "zip-GPU-batch", [512,1024,2048,4096,8192,16384], C.GPU],
+    ["ZIP on ALL: CPU threads beside the GPU", "zip-ALL-cputhreads", [1,4,8,13], C.ALL],
+    [".ocpk fast: threads", "ocpk-fast-threads", [1,2,4,8,16], C.ocpk]];
+  const srcs = [["s100M/all","20 × 100 MiB"],["s001G/one","1 × 1 GiB"],["s010G/one","1 × 10 GiB"]];
+  const max = Math.max(...Object.values(D.units));
+  document.getElementById("units").innerHTML = groups.map(([title, pre, xs, c]) =>
+    `<div><h3>${esc(title)}</h3><div class="scroll"><table><thead><tr><th>Setting</th>${srcs.map(s=>`<th>${s[1]}</th>`).join("")}</tr></thead><tbody>` +
+    xs.map(x => `<tr><td class="num">${x}</td>${srcs.map(s => `<td>${bar(D.units[`${s[0]}|${pre}${x}`],max,c)}</td>`).join("")}</tr>`).join("") +
+    `</tbody></table></div></div>`).join("");
+}
+renderSpeed(); renderPack(); renderSaved(); renderDetail(); renderUnits();
+</script>

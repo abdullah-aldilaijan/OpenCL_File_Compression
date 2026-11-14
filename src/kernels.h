@@ -99,6 +99,8 @@ __constant uint LE[29]={0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,
 __constant uint DB[30]={1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577};
 __constant uint DE[30]={0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13};
 
+// Size of a chunk sent as stored blocks (one per 65,535 bytes; chunks are at most 64 KiB).
+#define SLIM(n) ((n)<=65535u?(n)+5u:(n)+10u)
 #define PUT(v,n) do{ acc|=(ulong)((v)&((1u<<(n))-1u))<<cnt; cnt+=(n); \
   if(cnt>=32){ *(__global uint*)(out+pos)=(uint)acc; acc>>=32; cnt-=32; pos+=4; } }while(0)
 #define SYM(s) do{ uint e_=LIT[s]; PUT(e_&0xFFFFu, e_>>16); }while(0)
@@ -113,7 +115,8 @@ __kernel void deflate_blocks(__global const uchar *src,__global uchar *dst,
  for(uint j=0;j<512;j++)t4[j]=(uint4)(0xFFFFFFFFu);
  ulong acc=0; uint cnt=0,pos=0;
  PUT(2u,3u); // BFINAL=0, fixed Huffman
- while(i<n){
+ // Output only grows: once SLIM(n) bytes are written the chunk will be stored anyway, so stop early.
+ while(i<n && pos<SLIM(n)){
   uint len=0,distance=0;
   if(i+3<=n){
    uint h=(((uint)in[i]*251u+in[i+1])*251u+in[i+2])&4095u;
@@ -133,17 +136,223 @@ __kernel void deflate_blocks(__global const uchar *src,__global uchar *dst,
    PUT(DREV[dc],5u);PUT(distance-DB[dc],DE[dc]);i+=len;
   }else{SYM(in[i]);i++;}
  }
- SYM(256u);
- PUT(0u,3u); // non-final empty stored block aligns next chunk
- cnt=(cnt+7u)&~7u;
- if(cnt>=32){ *(__global uint*)(out+pos)=(uint)acc; acc>>=32; cnt-=32; pos+=4; }
- PUT(0u,16u);PUT(65535u,16u);
- for(uint k=0;k<cnt;k+=8)out[pos++]=(uchar)(acc>>k);
- uint size=pos;
- if(size>=n+5){
-  out[0]=0;out[1]=(uchar)n;out[2]=(uchar)(n>>8);
-  uint inverse=(~n)&65535;out[3]=(uchar)inverse;out[4]=(uchar)(inverse>>8);
-  for(uint j=0;j<n;j++)out[5+j]=in[j];size=n+5;
+ uint size=SLIM(n);
+ if(i>=n && pos<SLIM(n)){
+  SYM(256u);
+  PUT(0u,3u); // non-final empty stored block aligns next chunk
+  cnt=(cnt+7u)&~7u;
+  if(cnt>=32){ *(__global uint*)(out+pos)=(uint)acc; acc>>=32; cnt-=32; pos+=4; }
+  PUT(0u,16u);PUT(65535u,16u);
+  for(uint k=0;k<cnt;k+=8)out[pos++]=(uchar)(acc>>k);
+  size=pos;
+ }
+ if(size>=SLIM(n)){
+  // Stored blocks hold at most 65,535 bytes, so a 64 KiB chunk needs two.
+  uint j=0,o=0;
+  do{
+   uint m=min(n-j,65535u),inverse=(~m)&65535u;
+   out[o]=0;out[o+1]=(uchar)m;out[o+2]=(uchar)(m>>8);out[o+3]=(uchar)inverse;out[o+4]=(uchar)(inverse>>8);
+   o+=5;
+   uint q=0;
+   for(;q+16u<=m;q+=16u)vstore16(vload16(0,in+j+q),0,out+o+q);
+   for(;q<m;q++)out[o+q]=in[j+q];
+   o+=m;j+=m;
+  }while(j<n);
+  size=o;
+ }
+ sizes[id]=size;
+}
+)CLC";
+
+// Version 2 of deflate_blocks: same output bytes as the versions above. Changes:
+//  - the lookup tables are copied into __local memory per work-group. In __constant memory, a
+//    lookup is only fast when every work-item of a warp reads the same address; LIT[byte] is a
+//    different address per work-item, so those reads were serialised up to 32 ways;
+//  - length code + extra bits come from one combined table (LENC);
+//  - the three bytes for the hash are kept in registers and slide along, so a literal step reads
+//    one new byte from global memory instead of three;
+//  - launches are rounded up to whole work-groups; work-items past `end` only help copy tables.
+// The host prepends LIT[288], LCODE[259], DCODE[512], DREV[30] and LENC[259].
+inline const char* kDeflateKernelV2 = R"CLC(
+__constant uint DB2[30]={1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577};
+__constant uint DE2[30]={0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13};
+
+// Size of a chunk sent as stored blocks (one 5-byte header per 65,535 bytes).
+#define SLIM(n) ((n)+5u*max(1u,((n)+65534u)/65535u))
+#define PUT(v,n) do{ acc|=(ulong)(v)<<cnt; cnt+=(n); \
+  if(cnt>=32){ *(__global uint*)(out+pos)=(uint)acc; acc>>=32; cnt-=32; pos+=4; } }while(0)
+
+__kernel void deflate_blocks(__global const uchar *src,__global uchar *dst,
+ __global const uint *lengths,__global uint *sizes,__global ushort *tables,uint block,uint end){
+ __local uint lit[288],lenc[259],dist[30];  // dist: bit-reversed code | extra-bit count << 24
+ __local uint dbase[30];
+ __local uchar dcode[512];
+ for(uint j=get_local_id(0);j<512;j+=get_local_size(0)){
+  dcode[j]=DCODE[j];
+  if(j<288)lit[j]=LIT[j];
+  if(j<259)lenc[j]=LENC[j];
+  if(j<30){dist[j]=DREV[j]|((5u+DE2[j])<<24);dbase[j]=DB2[j];}
+ }
+ barrier(CLK_LOCAL_MEM_FENCE);
+ uint id=get_global_id(0);
+ if(id>=end)return;
+ uint n=lengths[id],i=0;
+ __global const uchar *in=src+(size_t)id*block;
+ __global uchar *out=dst+(size_t)id*block*2;
+ __global ushort *table=tables+(size_t)id*4096;
+ __global uint4 *t4=(__global uint4*)table;
+ for(uint j=0;j<512;j++)t4[j]=(uint4)(0xFFFFFFFFu);
+ ulong acc=0; uint cnt=0,pos=0;
+ PUT(2u,3u); // BFINAL=0, fixed Huffman
+ uint c0=in[0],c1=n>1?in[1]:0u,c2=n>2?in[2]:0u;  // bytes i, i+1, i+2
+ while(i<n && pos<SLIM(n)){
+  uint len=0,distance=0;
+  if(i+3<=n){
+   uint h=((c0*251u+c1)*251u+c2)&4095u;
+   uint prev=table[h];table[h]=(ushort)i;
+   if(prev!=0xFFFFu && i-prev<=32768u){
+    uint limit=min(258u,n-i);
+    __global const uchar *a=in+prev,*b=in+i;
+    while(len+4<=limit && all(vload4(0,a+len)==vload4(0,b+len)))len+=4;
+    while(len<limit && a[len]==b[len])len++;
+    distance=i-prev;
+   }
+  }
+  if(len>=3){
+   uint e=lenc[len];
+   PUT(e&0xFFFFFFu,e>>24);
+   uint dc=distance<=256u?dcode[distance-1]:dcode[256+((distance-1)>>7)];
+   uint d=dist[dc];
+   PUT((d&0xFFFFFFu)|((distance-dbase[dc])<<5),d>>24);
+   i+=len;
+   c0=i<n?in[i]:0u; c1=i+1<n?in[i+1]:0u; c2=i+2<n?in[i+2]:0u;
+  }else{
+   uint e=lit[c0];
+   PUT(e&0xFFFFu,e>>16);
+   i++;
+   c0=c1; c1=c2; c2=i+2<n?in[i+2]:0u;
+  }
+ }
+ uint size=SLIM(n);
+ if(i>=n && pos<SLIM(n)){
+  uint e=lit[256];
+  PUT(e&0xFFFFu,e>>16);
+  PUT(0u,3u); // non-final empty stored block aligns next chunk
+  cnt=(cnt+7u)&~7u;
+  if(cnt>=32){ *(__global uint*)(out+pos)=(uint)acc; acc>>=32; cnt-=32; pos+=4; }
+  PUT(0u,16u);PUT(65535u,16u);
+  for(uint k=0;k<cnt;k+=8)out[pos++]=(uchar)(acc>>k);
+  size=pos;
+ }
+ if(size>=SLIM(n)){
+  // Stored blocks hold at most 65,535 bytes, so larger chunks need several.
+  uint j=0,o=0;
+  do{
+   uint m=min(n-j,65535u),inverse=(~m)&65535u;
+   out[o]=0;out[o+1]=(uchar)m;out[o+2]=(uchar)(m>>8);out[o+3]=(uchar)inverse;out[o+4]=(uchar)(inverse>>8);
+   o+=5;
+   uint q=0;
+   for(;q+16u<=m;q+=16u)vstore16(vload16(0,in+j+q),0,out+o+q);
+   for(;q<m;q++)out[o+q]=in[j+q];
+   o+=m;j+=m;
+  }while(j<n);
+  size=o;
+ }
+ sizes[id]=size;
+}
+)CLC";
+
+// Version 3: version 2 plus a tag in the hash table. Each 32-bit entry holds the position (low
+// 20 bits, so chunks up to 1 MiB; 0xFFFFF = empty) and a 12-bit tag of the 3 bytes stored there. On incompressible data nearly every
+// lookup finds a different 3-byte string; a different tag proves the bytes differ, so the match
+// (which could only be shorter than 3, i.e. a literal) is rejected without reading global memory.
+// Equal tags still do the full comparison, so the output bytes are exactly the same.
+inline const char* kDeflateKernelV3 = R"CLC(
+__constant uint DB2[30]={1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577};
+__constant uint DE2[30]={0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13};
+
+// Size of a chunk sent as stored blocks (one 5-byte header per 65,535 bytes).
+#define SLIM(n) ((n)+5u*max(1u,((n)+65534u)/65535u))
+#define PUT(v,n) do{ acc|=(ulong)(v)<<cnt; cnt+=(n); \
+  if(cnt>=32){ *(__global uint*)(out+pos)=(uint)acc; acc>>=32; cnt-=32; pos+=4; } }while(0)
+
+__kernel void deflate_blocks(__global const uchar *src,__global uchar *dst,
+ __global const uint *lengths,__global uint *sizes,__global uint *tables,uint block,uint end){
+ __local uint lit[288],lenc[259],dist[30];
+ __local uint dbase[30];
+ __local uchar dcode[512];
+ for(uint j=get_local_id(0);j<512;j+=get_local_size(0)){
+  dcode[j]=DCODE[j];
+  if(j<288)lit[j]=LIT[j];
+  if(j<259)lenc[j]=LENC[j];
+  if(j<30){dist[j]=DREV[j]|((5u+DE2[j])<<24);dbase[j]=DB2[j];}
+ }
+ barrier(CLK_LOCAL_MEM_FENCE);
+ uint id=get_global_id(0);
+ if(id>=end)return;
+ uint n=lengths[id],i=0;
+ __global const uchar *in=src+(size_t)id*block;
+ __global uchar *out=dst+(size_t)id*block*2;
+ __global uint *table=tables+(size_t)id*4096;
+ __global uint4 *t4=(__global uint4*)table;
+ for(uint j=0;j<1024;j++)t4[j]=(uint4)(0xFFFFFu);
+ ulong acc=0; uint cnt=0,pos=0;
+ PUT(2u,3u); // BFINAL=0, fixed Huffman
+ uint c0=in[0],c1=n>1?in[1]:0u,c2=n>2?in[2]:0u;  // bytes i, i+1, i+2
+ while(i<n && pos<SLIM(n)){
+  uint len=0,distance=0;
+  if(i+3<=n){
+   uint h=((c0*251u+c1)*251u+c2)&4095u;
+   uint tag=((c0|(c1<<8)|(c2<<16))*2654435761u)&0xFFF00000u;
+   uint e=table[h];table[h]=i|tag;
+   uint prev=e&0xFFFFFu;
+   if(prev!=0xFFFFFu && (e&0xFFF00000u)==tag && i-prev<=32768u){
+    uint limit=min(258u,n-i);
+    __global const uchar *a=in+prev,*b=in+i;
+    while(len+4<=limit && all(vload4(0,a+len)==vload4(0,b+len)))len+=4;
+    while(len<limit && a[len]==b[len])len++;
+    distance=i-prev;
+   }
+  }
+  if(len>=3){
+   uint e=lenc[len];
+   PUT(e&0xFFFFFFu,e>>24);
+   uint dc=distance<=256u?dcode[distance-1]:dcode[256+((distance-1)>>7)];
+   uint d=dist[dc];
+   PUT((d&0xFFFFFFu)|((distance-dbase[dc])<<5),d>>24);
+   i+=len;
+   c0=i<n?in[i]:0u; c1=i+1<n?in[i+1]:0u; c2=i+2<n?in[i+2]:0u;
+  }else{
+   uint e=lit[c0];
+   PUT(e&0xFFFFu,e>>16);
+   i++;
+   c0=c1; c1=c2; c2=i+2<n?in[i+2]:0u;
+  }
+ }
+ uint size=SLIM(n);
+ if(i>=n && pos<SLIM(n)){
+  uint e=lit[256];
+  PUT(e&0xFFFFu,e>>16);
+  PUT(0u,3u); // non-final empty stored block aligns next chunk
+  cnt=(cnt+7u)&~7u;
+  if(cnt>=32){ *(__global uint*)(out+pos)=(uint)acc; acc>>=32; cnt-=32; pos+=4; }
+  PUT(0u,16u);PUT(65535u,16u);
+  for(uint k=0;k<cnt;k+=8)out[pos++]=(uchar)(acc>>k);
+  size=pos;
+ }
+ if(size>=SLIM(n)){
+  // Stored blocks hold at most 65,535 bytes, so larger chunks need several.
+  uint j=0,o=0;
+  do{
+   uint m=min(n-j,65535u),inverse=(~m)&65535u;
+   out[o]=0;out[o+1]=(uchar)m;out[o+2]=(uchar)(m>>8);out[o+3]=(uchar)inverse;out[o+4]=(uchar)(inverse>>8);
+   o+=5;
+   uint q=0;
+   for(;q+16u<=m;q+=16u)vstore16(vload16(0,in+j+q),0,out+o+q);
+   for(;q<m;q++)out[o+q]=in[j+q];
+   o+=m;j+=m;
+  }while(j<n);
+  size=o;
  }
  sizes[id]=size;
 }

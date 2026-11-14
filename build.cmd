@@ -15,8 +15,8 @@ if errorlevel 1 goto :novs
 if not exist build\obj-cli mkdir build\obj-cli
 if not exist build\obj-gui mkdir build\obj-gui
 set "FLAGS=/nologo /std:c++20 /O2 /EHsc /utf-8 /W4 /MT /MP /DUNICODE /D_UNICODE"
-set "CORE=src\common.cpp src\ocl.cpp src\hardware.cpp src\zip_create.cpp src\zip_restore.cpp src\legacy.cpp"
-set "LIBS=bcrypt.lib advapi32.lib user32.lib"
+set "CORE=src\common.cpp src\ocl.cpp src\hardware.cpp src\zip_create.cpp src\zip_restore.cpp src\legacy.cpp src\pack.cpp"
+set "LIBS=bcrypt.lib advapi32.lib user32.lib setupapi.lib cfgmgr32.lib cabinet.lib"
 cl %FLAGS% /Fobuild\obj-cli\ /Febuild\oclzip.exe src\cli.cpp %CORE% /link /MANIFEST:EMBED /MANIFESTINPUT:src\app.manifest %LIBS%
 if errorlevel 1 exit /b 1
 cl %FLAGS% /Fobuild\obj-gui\ /Febuild\oclzip-gui.exe src\gui.cpp %CORE% /link /SUBSYSTEM:WINDOWS /MANIFEST:EMBED /MANIFESTINPUT:src\app.manifest %LIBS% gdi32.lib comctl32.lib ole32.lib shell32.lib

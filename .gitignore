@@ -1,3 +1,8 @@
 build/
 *.zip
 *.oclr
+__pycache__/
+*.exe
+*.jsonl
+.tools/
+bench_out/

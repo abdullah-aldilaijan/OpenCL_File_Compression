@@ -380,6 +380,8 @@ std::vector<std::wstring> safe_parts(const std::string& name) {
 
 }  // namespace
 
+std::vector<std::wstring> safe_archive_parts(const std::string& name) { return safe_parts(name); }
+
 void restore_zip(const std::wstring& source_in, const std::wstring& target_in) {
     std::wstring source = absolute_path(source_in), target = absolute_path(target_in);
     if (exists(target)) throw Failure("Choose a new destination folder");

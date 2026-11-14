@@ -49,6 +49,9 @@ class File {
 public:
     static File open_read(const std::wstring& path);
     static File create_new(const std::wstring& path);  // fails if it exists
+    static File open_write_existing(const std::wstring& path);
+    // FILE_FLAG_NO_BUFFERING: offsets, sizes and buffers must be sector-aligned (4096 is safe).
+    static File open_read_unbuffered(const std::wstring& path);
     File() = default;
     File(File&& other) noexcept;
     File& operator=(File&& other) noexcept;
@@ -129,8 +132,44 @@ std::vector<DeviceOption> discover_devices(std::vector<std::string>& notices);
 // encoder on CPU threads; anything else selects an OpenCL GPU by name substring.
 void create_zip(const std::wstring& source, const std::wstring& target, const std::string& device);
 
+// The ZIP encoder (fixed-Huffman DEFLATE of independent chunks) for other archive formats.
+// Fill input() with count chunks (chunk k at input() + k * chunk_size(), lengths()[k] bytes), call
+// run(count), then read each chunk's DEFLATE bytes with output(). Every chunk ends byte-aligned and
+// non-final, so chunks placed end to end, followed by the 5 bytes {1,0,0,0xFF,0xFF}, form one
+// valid raw DEFLATE stream. CPU, GPU and ALL produce the same bytes.
+class ChunkCompressor {
+public:
+    virtual ~ChunkCompressor() = default;
+    virtual std::string name() const = 0;
+    virtual uint32_t capacity() const = 0;  // most chunks per run()
+    virtual uint8_t* input() = 0;
+    virtual uint32_t* lengths() = 0;
+    virtual void run(uint32_t count) = 0;
+    virtual const uint8_t* output(uint32_t k, uint32_t& size) const = 0;
+    virtual bool is_gpu() const = 0;
+};
+uint32_t deflate_chunk_size();  // OCLZIP_CHUNK_KB in bytes
+// device: "CPU", "GPU" (the best OpenCL GPU) or "ALL" (every GPU plus the CPU). min_chunks: the
+// most chunks one run() must accept.
+std::vector<std::unique_ptr<ChunkCompressor>> make_chunk_compressors(const std::string& device, uint32_t min_chunks);
+
+// Checks the fast CPU encoder against the reference encoder; returns 0 when they agree.
+int selftest_encoders(const std::vector<std::wstring>& files);
+// Times every encoder version on one in-memory batch built from the given files.
+int bench_encoders(const std::vector<std::wstring>& files, uint32_t chunks, int reps);
+
 // folder_archive.py restore(): safe ZIP extraction (stored + DEFLATE) into a new folder.
 void restore_zip(const std::wstring& source, const std::wstring& target);
+
+// Path parts of an archive name, refusing "..", drive letters, reserved Windows names and the like.
+std::vector<std::wstring> safe_archive_parts(const std::string& name);
+
+// Solid .ocpk archive (pack.cpp): all files combined into one stream, cut into blocks and
+// compressed in parallel (level "fast" = XPRESS+Huffman, "max" = LZMS, "store"); identical files once.
+void create_pack(const std::wstring& source, const std::wstring& target, const std::string& level);
+// Extracts an .ocpk archive into a new folder; with an empty target, only checks every CRC.
+void restore_pack(const std::wstring& source, const std::wstring& target);
+bool is_pack_archive(const std::wstring& path);
 
 // opencl_lz.py / opencl_compress.py / gpu_folder.py decompression of legacy .oclr archives.
 void restore_legacy(const std::wstring& source, const std::wstring& target, const std::string& device);
