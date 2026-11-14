@@ -256,7 +256,7 @@ Optional tuning through environment variables:
 
 These results come from the **oclzip Test Matrix**: an HTML page with every source size, chunk and block size, and device. To generate it on another machine, follow [bench/TEST_MATRIX.md](bench/TEST_MATRIX.md).
 
-Test sets were built from 4 MiB slices of the Object folder (video, installers, documents and so on, mixed the same way in every file): 50 × 10 MiB, 20 × 50 MiB, 20 × 100 MiB, 8 × 500 MiB, 6 × 1 GiB and 3 × 10 GiB, 43.3 GiB in all. Each set was compressed as one file and as the whole folder, plus all sets together. Each of the 13 sources ran 39 options: ZIP on CPU, GPU and `ALL` at 2/4/8/16/32/64/128/256/512 KiB chunks, and `.ocpk` with 1/4/16 MiB blocks as XPRESS (`fast`) and as DEFLATE on GPU (`gpu`), `ALL` (`all`) and CPU (`deflate`). That is 507 combinations with 3 runs each (1,521 runs, none failed). The first run of each was verified: every CPU ZIP fully inflated, every `.ocpk` passed `oclzip test`, and in all 156 groups the CPU, GPU and `ALL` outputs (ZIP, and `.ocpk` DEFLATE) were byte-identical. The full results, with every option per source, are on the test matrix page built by `bench/build_report.py`.
+Test sets were built from 4 MiB slices of the Object folder (video, installers, documents and so on, mixed the same way in every file): 50 × 10 MiB, 20 × 50 MiB, 20 × 100 MiB, 8 × 500 MiB, 6 × 1 GiB and 3 × 10 GiB, 43.3 GiB in all. Each set was compressed as one file and as the whole folder, plus all sets together; then a 4 × 10 GiB set and a 100 GiB mix (5 × 1 GiB, 5 × 5 GiB, 5 × 10 GiB and 1,576 files of 1–500 MiB; 1,591 files) were added. Each of the 15 sources ran 61 options: ZIP on CPU, GPU and `ALL` at 1/2/4/8/16/32/64/128/256/512 KiB and 1 MiB chunks, and `.ocpk` with 1/2/4/8/16/32/64 MiB blocks as XPRESS (`fast`) and as DEFLATE on GPU (`gpu`), `ALL` (`all`) and CPU (`deflate`). The first 13 sources ran 3 times at 2–512 KiB and 1/4/16 MiB (median shown); everything else ran once, one compression at a time: 1,929 runs, none failed. Every archive's CRC was compared across CPU, GPU and `ALL`: all 270 groups were byte-identical. On sources up to 16 GiB (and on every source in the first round) each CPU ZIP was also fully inflated and each `.ocpk` passed `oclzip test`. The full results, with every option per source, are on the test matrix page built by `bench/build_report.py`.
 
 Median speed (MB/s) at the default 32 KiB chunk:
 
@@ -272,11 +272,16 @@ Median speed (MB/s) at the default 32 KiB chunk:
 | 1 × 10 GiB | 10.0 GiB | 1022 | 461 | 1002 | 1346 | 10.77% | 13.97% |
 | 3 × 10 GiB | 30.0 GiB | 908 | 474 | 931 | 949 | 10.65% | 14.80% |
 | all sets | 43.3 GiB | 904 | 472 | 943 | 993 | 10.59% | 19.84% |
+| 4 × 10 GiB | 40.0 GiB | 818 | 473 | 852 | 912 | 10.61% | 15.04% |
+| 100 GiB mix (1,591 files) | 100 GiB | 874 | 480 | 663 | 945 | 10.60% | 58.30% * |
+
+\* The Object folder holds only 48.7 GiB, so most data appears twice in the 100 GiB mix: ZIP is not affected, but `.ocpk` stores the repeats once.
 
 Chunk size on all sets together (43.3 GiB, median MB/s):
 
 | Chunk | CPU | GPU | ALL | ZIP saved |
 |---|---|---|---|---|
+| 1 KiB | 569 * | 464 | 841 | 8.86% |
 | 2 KiB | 869 | 464 | 848 | 9.46% |
 | 4 KiB | 968 | 469 | 1015 | 9.86% |
 | 8 KiB | 909 | 470 | 866 | 10.15% |
@@ -286,8 +291,23 @@ Chunk size on all sets together (43.3 GiB, median MB/s):
 | 128 KiB | 784 | 393 | 854 | 10.65% |
 | 256 KiB | 904 | 341 | 885 | 10.65% |
 | 512 KiB | 788 | 333 | 868 | 10.65% |
+| 1 MiB | 725 | 332 | 801 | 10.63% |
 
-`.ocpk` on all sets together (4 MiB blocks): XPRESS 993 MB/s, saved 19.84%; DEFLATE on GPU 464 MB/s, `ALL` 915 MB/s, CPU 836 MB/s, all saving 18.09% with the same archive.
+1 KiB and 1 MiB ran once (\* a slow single run; on the 100 GiB mix CPU 1 KiB ran at 886 MB/s).
+
+`.ocpk` block size on all sets together (MB/s and saved; 1/4/16 MiB are medians of 3 runs, the others 1 run):
+
+| Block | XPRESS | XPRESS saved | DEFLATE GPU | DEFLATE `ALL` | DEFLATE CPU | DEFLATE saved |
+|---|---|---|---|---|---|---|
+| 1 MiB | 1006 | 20.00% | 459 | 903 | 915 | 18.09% |
+| 2 MiB | 832 | 19.96% | 474 | 809 | 764 | 18.09% |
+| 4 MiB | 993 | 19.84% | 464 | 915 | 836 | 18.09% |
+| 8 MiB | 954 | 19.55% | 473 | 813 | 751 | 18.09% |
+| 16 MiB | 977 | 18.02% | 464 | 917 | 810 | 18.09% |
+| 32 MiB | 913 | 17.61% | 423 | 762 | 483 * | 18.12% |
+| 64 MiB | 908 | 15.83% | 448 | 745 | 707 | 18.14% |
+
+GPU, `ALL` and CPU write the same DEFLATE archive. \* a slow single run.
 
 What the tests show:
 - **CPU is the fastest single device at every size.** Below about 16 GiB the source sits in the file cache and the CPU reaches 1.3–1.6 GB/s; above that, reading and writing on the one drive hold everything to about 0.9–1.0 GB/s.
@@ -295,6 +315,8 @@ What the tests show:
 - **`ALL` only pays off on large jobs**, where it matches or slightly beats CPU (6 × 1 GiB, 3 × 10 GiB, all sets). On small jobs it pays the GPU start-up and is slower than CPU.
 - **Chunk size trades space for speed, up to 64 KiB.** Going from 4 to 64 KiB saves about 0.8 points more (for example 10.03% → 10.82% on the 10 GiB file). 2 KiB is often the CPU's fastest setting on cached data but saves about 1 point less than 32 KiB. Above 64 KiB nothing more is saved, because DEFLATE only looks back 32 KiB, and the GPU gets slower with fewer, longer chunks (333 MB/s at 512 KiB, and only 7–65 MB/s on files of 100 MiB or less). 16 KiB is a good middle: within 0.2 points of 32 KiB and often faster.
 - **`.ocpk` DEFLATE runs on the GPU** and writes the same archive on GPU, `ALL` and CPU. It saves 7–8 points more than ZIP on all sets, but the GPU reaches only about half the CPU's speed with it on this machine.
+- **Bigger sources do not change the speed per byte.** 3 × 10 GiB, 4 × 10 GiB, all sets and the 100 GiB mix run at about the same MB/s on each device; above about 16 GiB the drive is the limit, not the amount of data or the number of files.
+- **`.ocpk` XPRESS saves less with big blocks** (20.0% at 1 MiB, 15.8% at 64 MiB on all sets): its quick sampling judges a whole mixed block at once. DEFLATE is almost unaffected (18.09–18.14%).
 - **`.ocpk` XPRESS saves 3–4 points more than ZIP at about the same speed** on large data, and much more on overlapping data (19.8% on all sets, because the sets share slices). 1 and 4 MiB blocks are close; 16 MiB blocks save less (its sampling misjudges mixed blocks) and are slower on small sources.
 
 Scaling with processing units (median MB/s of 2 runs, `units.py`; ZIPs were byte-identical for every setting):
